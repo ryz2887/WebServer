@@ -173,8 +173,11 @@ bool HttpRequest::UserVerify(const string &name, const string &pwd, bool isLogin
     if(name == "" || pwd == "") { return false; }
     LOG_INFO("Verify name:%s pwd:%s", name.c_str(), pwd.c_str());
     MYSQL* sql;
-    SqlConnRAII(&sql,  SqlConnPool::Instance());
-    assert(sql);
+    SqlConnRAII raii(&sql,  SqlConnPool::Instance());   // 命名对象:活到函数结束才析构(临时对象会在分号处析构!)
+    if(!sql) {                                          // 池子打满时优雅降级,不再 assert 崩
+        LOG_ERROR("UserVerify: no available MySQL connection");
+        return false;
+    }
     
     bool flag = false;
     unsigned int j = 0;
@@ -224,7 +227,7 @@ bool HttpRequest::UserVerify(const string &name, const string &pwd, bool isLogin
         }
         flag = true;
     }
-    SqlConnPool::Instance()->FreeConn(sql);
+    // 连接由 raii 的析构函数自动归还,这里不能再手动 FreeConn(否则双重归还)
     LOG_DEBUG( "UserVerify success!!");
     return flag;
 }

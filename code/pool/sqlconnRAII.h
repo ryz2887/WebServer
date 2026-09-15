@@ -11,6 +11,10 @@ class SqlConnRAII {
         connpool_ = connpool;
     }
     
+    // 禁拷贝:防止两个对象持有同一连接,析构时双重归还
+    SqlConnRAII(const SqlConnRAII&) = delete;
+    SqlConnRAII& operator=(const SqlConnRAII&) = delete;
+
     ~SqlConnRAII() {
         if(sql_) { connpool_->FreeConn(sql_); }
     }
