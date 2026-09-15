@@ -27,6 +27,7 @@ class HeapTimer {
     HeapTimer() { heap_.reserve(64); }
     ~HeapTimer() { clear(); }
     void adjust(int id, int newExpires);
+    void remove(int id);
     void add(int id, int timeOut, const TimeoutCallBack& cb);
     void doWork(int id);
     void clear();

@@ -1,5 +1,8 @@
 # 编译产物
-server
+# ⚠️ 必须写成 /server(带前导斜杠 = 只匹配仓库根目录):
+#    裸写 server 会匹配任意层级叫 server 的文件或目录,把 code/server/ 整个目录
+#    (epoller.h/.cpp、webserver.h/.cpp)也一起忽略掉 —— 那些是源码,必须进仓库!
+/server
 *.o
 *.exe
 *.out

@@ -83,6 +83,19 @@ void HeapTimer::adjust(int id, int timeout) {
     siftdown_(ref_[id], heap_.size());
 }
 
+/* 按 id 撤销一个定时器节点(不存在就什么都不做,幂等)。
+   用途:连接被关闭时把它的定时器一起撤掉,免得残节点到期后又空跑一次回调。
+   ⚠️ 只能在"主线程的非回调代码"里调用:
+      1) HeapTimer 全程只由主循环线程碰,worker 线程不许直接调(add/adjust/remove/tick 都不是线程安全的);
+      2) 回调是在 tick()/doWork() 内部被调用的,回调返回后它们会按"回调前记下的下标"删节点——
+         回调里只要改堆(remove 会调 del_ 交换),下标立刻失效 → 删错节点、ref_ 和 heap_ 失去同步。
+      所以 web 层是"worker 只把 fd 投进待处理队列,主循环在 tick 之外统一撤/装"。 */
+void HeapTimer::remove(int id) {
+    std::unordered_map<int, size_t>::iterator it = ref_.find(id);
+    if(it == ref_.end()) { return; }
+    del_(it->second);
+}
+
 void HeapTimer::tick() {
     if(heap_.empty()) {
         return;
