@@ -4,6 +4,7 @@
 #include <iostream>
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 
 static int g_pass = 0, g_fail = 0;
 
@@ -13,6 +14,9 @@ static int g_pass = 0, g_fail = 0;
 } while (0)
 
 int main() {
+    // 初始化日志(线程池里任务抛异常会记日志,可到 test_log_tmp/ 里查看)
+    Log::Instance()->init(1, "./test_log_tmp/", ".log", 1024);
+
     // ---- 用例1: 基本构造 ----
     {
         ThreadPool pool(4);
@@ -53,7 +57,6 @@ int main() {
         ThreadPool pool(4);
         std::atomic<int> maxConcurrent{0};
         std::atomic<int> running{0};
-        std::mutex mtx;
 
         const int N = 20;
         for (int i = 0; i < N; i++) {
@@ -86,14 +89,57 @@ int main() {
         CHECK(counter.load() >= 2, "用例5: 移动后的池正常执行任务,>=2");
     }
 
+    // ---- 用例6: 任务抛异常,worker不崩,后续任务照常执行 ----
+    {
+        ThreadPool pool(2);
+        std::atomic<int> ran{0};
+
+        pool.AddTask([]() { throw std::runtime_error("boom"); });   // 会抛异常的任务
+        pool.AddTask([&ran]() { ran.fetch_add(1); });               // 后续任务应照常执行
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(ran.load() == 1, "用例6: 任务抛异常后进程存活,后续任务照常执行");
+    }
+
+    // ---- 用例7: 析构等待队列中的任务全部完成(优雅退出) ----
+    {
+        std::atomic<int> done{0};
+        {
+            ThreadPool pool(2);
+            for (int i = 0; i < 4; i++) {
+                pool.AddTask([&done]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    done.fetch_add(1);
+                });
+            }
+        }   // 析构:应等待 4 个任务全部跑完才返回
+        CHECK(done.load() == 4, "用例7: 析构返回时剩余任务已全部完成(优雅退出)");
+    }
+
+    // ---- 用例8: 每个被接受的任务都会被执行完 ----
+    {
+        std::atomic<int> executed{0};
+        int accepted = 0;
+        {
+            ThreadPool pool(4);
+            for (int i = 0; i < 50; i++) {
+                if (pool.AddTask([&executed]() { executed.fetch_add(1); })) {
+                    accepted++;
+                }
+            }
+        }   // 析构等待
+        CHECK(executed.load() == accepted && accepted == 50,
+              "用例8: 被接受的50个任务在析构前全部完成(不丢失)");
+    }
+
     std::cout << "\n==== 结果: " << g_pass << " 通过, " << g_fail << " 失败 ====\n";
     return g_fail == 0 ? 0 : 1;
 }
 
 /*
-在 Ubuntu 终端里编译运行:
+在 Ubuntu 终端里编译运行(现在依赖 log/buffer,链接命令变长了):
 
     cd /mnt/hgfs/Project/WebServerRecur
-    g++ -std=c++14 test/test_threadpool.cpp -o ~/test_threadpool -pthread
+    g++ -std=c++14 -g test/test_threadpool.cpp code/log/log.cpp code/buffer/buffer.cpp -o ~/test_threadpool -pthread
     ~/test_threadpool
 */
