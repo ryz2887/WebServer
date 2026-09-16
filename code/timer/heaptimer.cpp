@@ -9,13 +9,17 @@ void HeapTimer::SwapNode_(size_t i, size_t j) {
 }
 
 void HeapTimer::siftup_(size_t i) {
-    assert(i >=0 && i < heap_.size());
-    size_t j = (i - 1) / 2;
-    while(j >= 0) {
+    assert(i < heap_.size());
+    /* ⚠️ 循环条件必须用 i,不能用 j:j 是 size_t,`j >= 0` 恒为真;而 i == 0 时
+       (0-1)/2 会下溢成天文数字 → heap_[j] 变成野指针读(UB),读到的垃圾若判成
+       "父亲更小"就会走到 SwapNode_(0, 天文数字) → assert 直接把进程 abort。
+       这条路径不罕见:del_(0) 在"堆里恰好 2 个节点"时必然走到
+       (被换到根上的节点没有孩子 → siftdown_ 直接返回 false → 转来 siftup_(0))。 */
+    while(i > 0) {
+        size_t j = (i - 1) / 2;
         if(heap_[j] < heap_[i]) { break; }
         SwapNode_(i, j);
         i = j;
-        j = (i - 1) / 2;
     }
 }
 
@@ -41,6 +45,9 @@ void HeapTimer::add(int id, int timeout, const TimeoutCallBack& cb) {
         i = heap_.size();
         ref_[id] = i;
         heap_.push_back({id, Clock::now() + MS(timeout), cb});
+        siftup_(i);   /* 新节点只可能比父亲更早到期(比如先加 5s 的、再加 0s 的),
+                         必须上浮,否则堆顶不是最早的 → tick() 会一直看着"还没到期"的
+                         堆顶 break,真正到期的那个要等它被弹掉才轮到(超时延迟触发) */
     }
     else {
         i = ref_[id];

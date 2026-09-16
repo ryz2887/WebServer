@@ -123,6 +123,33 @@ int main() {
         CHECK(true, "用例11: doWork 不存在的 id 不崩溃");
     }
 
+    // ---- 用例12: 长超时先放、短超时后放 → 短的必须先触发 ----
+    // 抓的是"add 的新节点分支漏了 siftup_":缺了它,末尾追加的短超时不会上浮,
+    // 堆顶仍是那个 300ms 的 → tick 一看"还没到期"就 break → 真正到期的被延迟
+    {
+        HeapTimer timer;
+        int order = 0, longFirst = 0, shortSecond = 0;
+        timer.add(1, 300, [&]{ longFirst  = ++order; });   // 先放:300ms
+        timer.add(2, 0,   [&]{ shortSecond = ++order; });  // 后放:0ms(立即)
+        timer.tick();
+        CHECK(shortSecond == 1, "用例12: 后放入的短超时必须先触发(靠 siftup_ 上浮)");
+        CHECK(longFirst == 0,   "用例12: 300ms 的还没到期,不该触发");
+    }
+
+    // ---- 用例13: 堆里 2 个节点时 remove 掉根节点 ----
+    // 抓的是 siftup_ 的 size_t 下溢:del_(0) 换上来一个"没有孩子可沉"的节点 →
+    // siftdown_ 直接返回 false → 转去 siftup_(0) → (0-1)/2 下溢 → heap_[天文数字] 野读
+    {
+        HeapTimer timer;
+        int a = 0, b = 0;
+        timer.add(1, 10000, [&]{ a++; });
+        timer.add(2, 20000, [&]{ b++; });
+        timer.remove(1);   // 根节点 + 还有 1 个兄弟 → 走 del_(0)
+        timer.remove(2);
+        CHECK(a == 0 && b == 0, "用例13: 被 remove 的定时器不该触发回调");
+        CHECK(timer.GetNextTick() == -1, "用例13: 两个都 remove 后堆为空");
+    }
+
     std::cout << "\n==== 结果: " << g_pass << " 通过, " << g_fail << " 失败 ====\n";
     return g_fail == 0 ? 0 : 1;
 }
