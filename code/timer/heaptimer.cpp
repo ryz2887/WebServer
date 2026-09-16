@@ -86,8 +86,15 @@ void HeapTimer::del_(size_t index) {
 
 void HeapTimer::adjust(int id, int timeout) {
     assert(!heap_.empty() && ref_.count(id) > 0);
-    heap_[ref_[id]].expires = Clock::now() + MS(timeout);
-    siftdown_(ref_[id], heap_.size());
+    size_t i = ref_[id];
+    heap_[i].expires = Clock::now() + MS(timeout);
+    /* 改到期时间有**两个方向**:推后 → 需要下沉;提前 → 需要上浮。
+       原版只调 siftdown_ —— 遇到"提前"时节点赖在原地不动,堆序就破了
+       (父亲比它晚,而它又不在堆顶 → tick() 看着堆顶 break,它被延迟触发)。
+       这里用和 add() 已有分支一致的通用写法:"先试下沉,没沉下去再试上浮"。 */
+    if(!siftdown_(i, heap_.size())) {
+        siftup_(i);
+    }
 }
 
 /* 按 id 撤销一个定时器节点(不存在就什么都不做,幂等)。

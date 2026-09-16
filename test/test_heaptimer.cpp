@@ -150,6 +150,20 @@ int main() {
         CHECK(timer.GetNextTick() == -1, "用例13: 两个都 remove 后堆为空");
     }
 
+    // ---- 用例14: adjust 把非堆顶节点"提前"(反方向) ----
+    // 抓的是 adjust 只调 siftdown_:节点改成更早到期时它该上浮,赖在原地就破坏堆序
+    {
+        HeapTimer timer;
+        int a = 0, b = 0;
+        timer.add(1, 5000, [&]{ a++; });   // 先放 5 秒
+        timer.add(2, 300,  [&]{ b++; });   // 再放 300ms → 上浮成堆顶
+        // 现在堆 = [id2(300ms), id1(5000ms)],把下标 1 上的 id1 提前到 0ms
+        timer.adjust(1, 0);
+        timer.tick();
+        CHECK(a == 1, "用例14: adjust 提前的定时器必须立刻触发(需要上浮)");
+        CHECK(b == 0, "用例14: 300ms 那个还没到期,不该触发");
+    }
+
     std::cout << "\n==== 结果: " << g_pass << " 通过, " << g_fail << " 失败 ====\n";
     return g_fail == 0 ? 0 : 1;
 }
