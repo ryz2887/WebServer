@@ -10,11 +10,8 @@ void HeapTimer::SwapNode_(size_t i, size_t j) {
 
 void HeapTimer::siftup_(size_t i) {
     assert(i < heap_.size());
-    /* ⚠️ 循环条件必须用 i,不能用 j:j 是 size_t,`j >= 0` 恒为真;而 i == 0 时
-       (0-1)/2 会下溢成天文数字 → heap_[j] 变成野指针读(UB),读到的垃圾若判成
-       "父亲更小"就会走到 SwapNode_(0, 天文数字) → assert 直接把进程 abort。
-       这条路径不罕见:del_(0) 在"堆里恰好 2 个节点"时必然走到
-       (被换到根上的节点没有孩子 → siftdown_ 直接返回 false → 转来 siftup_(0))。 */
+    /* 循环条件用 i 而不是 (i-1)/2 得到的 j:j 为 size_t,`j >= 0` 恒真,
+       i == 0 时 (0-1)/2 下溢成巨大值 → heap_[j] 越界访问。 */
     while(i > 0) {
         size_t j = (i - 1) / 2;
         if(heap_[j] < heap_[i]) { break; }
@@ -45,9 +42,7 @@ void HeapTimer::add(int id, int timeout, const TimeoutCallBack& cb) {
         i = heap_.size();
         ref_[id] = i;
         heap_.push_back({id, Clock::now() + MS(timeout), cb});
-        siftup_(i);   /* 新节点只可能比父亲更早到期(比如先加 5s 的、再加 0s 的),
-                         必须上浮,否则堆顶不是最早的 → tick() 会一直看着"还没到期"的
-                         堆顶 break,真正到期的那个要等它被弹掉才轮到(超时延迟触发) */
+        siftup_(i);   /* 新节点可能比父亲更早到期,上浮以维持"堆顶最早"的不变式 */
     }
     else {
         i = ref_[id];
@@ -88,22 +83,14 @@ void HeapTimer::adjust(int id, int timeout) {
     assert(!heap_.empty() && ref_.count(id) > 0);
     size_t i = ref_[id];
     heap_[i].expires = Clock::now() + MS(timeout);
-    /* 改到期时间有**两个方向**:推后 → 需要下沉;提前 → 需要上浮。
-       原版只调 siftdown_ —— 遇到"提前"时节点赖在原地不动,堆序就破了
-       (父亲比它晚,而它又不在堆顶 → tick() 看着堆顶 break,它被延迟触发)。
-       这里用和 add() 已有分支一致的通用写法:"先试下沉,没沉下去再试上浮"。 */
+    /* 到期时间可能推后(需下沉)也可能提前(需上浮):先试下沉,没沉下去说明该上浮 */
     if(!siftdown_(i, heap_.size())) {
         siftup_(i);
     }
 }
 
-/* 按 id 撤销一个定时器节点(不存在就什么都不做,幂等)。
-   用途:连接被关闭时把它的定时器一起撤掉,免得残节点到期后又空跑一次回调。
-   ⚠️ 只能在"主线程的非回调代码"里调用:
-      1) HeapTimer 全程只由主循环线程碰,worker 线程不许直接调(add/adjust/remove/tick 都不是线程安全的);
-      2) 回调是在 tick()/doWork() 内部被调用的,回调返回后它们会按"回调前记下的下标"删节点——
-         回调里只要改堆(remove 会调 del_ 交换),下标立刻失效 → 删错节点、ref_ 和 heap_ 失去同步。
-      所以 web 层是"worker 只把 fd 投进待处理队列,主循环在 tick 之外统一撤/装"。 */
+/* 按 id 撤销一个定时器节点(不存在则什么都不做,幂等)。
+   线程约束:HeapTimer 不是线程安全的,只允许主循环线程在回调之外调用。 */
 void HeapTimer::remove(int id) {
     std::unordered_map<int, size_t>::iterator it = ref_.find(id);
     if(it == ref_.end()) { return; }
@@ -136,7 +123,7 @@ void HeapTimer::clear() {
 
 int HeapTimer::GetNextTick() {
     tick();
-    size_t res = -1;
+    int res = -1;
     if(!heap_.empty()) {
         res = std::chrono::duration_cast<MS>(heap_.front().expires - Clock::now()).count();
         if(res < 0) { res = 0; }
