@@ -96,6 +96,29 @@ void WebServer::Start() {
             timeMS = 100;
         }
         int eventCnt = epoller_->Wait(timeMS);
+        /* epoll_wait 报真错误时在这里报告 —— **刻意不放在 Epoller 里**:
+           Epoller 是比 Log 更底层的机制封装,让底层反向依赖上层的日志系统是
+           分层倒置(会把 Log → Buffer 整条链拖进来,还堵死"Log 将来用 epoll"
+           的可能)。Epoller 只如实返回,报不报、停不停是应用层的决定。
+           EINTR 已在 Epoller::Wait 内部重试掉,能走到这里的是 EBADF/EINVAL/EFAULT
+           这类**不可恢复**错误 —— 事件循环已经没用了,继续转只是"带日志的忙等",
+           所以直接退出。 */
+        if(eventCnt < 0) {
+            /* errno 必须**就地取走**,不能直接写 strerror(errno):
+               LOG_ERROR 展开后是
+                   Log* log = Log::Instance();
+                   if (log->IsOpen() && log->GetLevel() <= 3)
+                       log->write(3, "...", strerror(errno));
+               strerror(errno) 排在三次函数调用**之后**才求值,而这些调用按 C 标准
+               "允许"修改 errno(标准只保证失败时设置,不保证成功时不设)——
+               那样日志里就会打出一个无关的错误码,极端情况下是 "Success"。
+               这跟 AddFd 的 saveErrno 是同一个契约:错误码在发生处取走,
+               别让它跨过其它调用。(实测 Log 的那三个函数当前不改 errno,
+               但那是运气,不是契约。) */
+            const int err = errno;
+            LOG_ERROR("epoll_wait failed, server stopping: %s", strerror(err));
+            break;
+        }
         /* 先消费待办(必须在事件分发**之前**):撤残留定时器节点要赶在
            "这个 fd 被本轮 DealListen_ 的新连接复用"前面 */
         DrainPending_();
@@ -205,7 +228,30 @@ void WebServer::AddClient_(int fd, sockaddr_in addr) {
            发现连接正忙时会推迟关闭(见它的注释) */
         timer_->add(fd, timeoutMS_, std::bind(&WebServer::OnTimeout_, this, &users_[fd]));
     }
-    epoller_->AddFd(fd, EPOLLIN | connEvent_);
+    /* 注册失败必须当场处理。两个真实场景:
+       ① ENOSPC —— 超过 /proc/sys/fs/epoll/max_user_watches
+       ② ENOMEM —— 内核内存不足
+       都不是编程错误,而是"资源不够",对应动作跟上面 MAX_FD 那条分支同类:
+       告诉客户端"忙",然后关掉。**不能就这么算了** —— 这个 fd 永远不会被 epoll
+       报事件,留着的唯一结局是挂在 users_ 里等定时器超时;客户端看到的是
+       "连上了但没响应,几十秒后断开",这种症状极难排查。 */
+    int err = 0;
+    if(!epoller_->AddFd(fd, EPOLLIN | connEvent_, &err)) {
+        LOG_ERROR("AddFd client[%d] failed: %s", fd, strerror(err));
+        /* AddClient_ 只跑在主线程(DealListen_ ← Start),所以能直接动 timer_;
+           CloseConn_ 那种"可能跑在 worker 线程"的处境就不行了,见它的注释 */
+        timer_->remove(fd);
+        /* 不能复用 SendError_:它内部会 close(fd),而下面的 users_[fd].Close()
+           还要再 close 一次 —— 两次 close 同一个 fd 号,若中间被 accept 复用,
+           就会关掉别人的连接。所以提示自己发,关闭只走 HttpConn::Close 一条路 */
+        const char busy[] = "Server busy!";
+        /* MSG_NOSIGNAL 不是可选的:对端若已关闭,send 会触发 SIGPIPE,
+           而本项目**全项目没有 signal(SIGPIPE, SIG_IGN)**,默认动作是直接杀掉进程。
+           突发连接下"刚 accept 完对端就关了"完全可能,所以这里必须带上。 */
+        send(fd, busy, sizeof(busy) - 1, MSG_NOSIGNAL);
+        users_[fd].Close();                     // close(fd) + userCount-- + isClose_=true
+        return;
+    }
     SetFdNonblock(fd);
     LOG_INFO("Client[%d] in!", users_[fd].GetFd());
 }
