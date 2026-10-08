@@ -170,7 +170,7 @@ void HttpRequest::ParseFromUrlencoded_() {
 }
 
 bool HttpRequest::UserVerify(const string &name, const string &pwd, bool isLogin) {
-    if(name == "" || pwd == "") { return false; }
+    if(name == "" || pwd == "" || name.size() >= 127 || pwd.size() >= 127) { return false; }
     LOG_INFO("Verify name:%s pwd:%s", name.c_str(), pwd.c_str());
     MYSQL* sql;
     SqlConnRAII raii(&sql,  SqlConnPool::Instance());   // 命名对象:活到函数结束才析构(临时对象会在分号处析构!)
@@ -184,9 +184,15 @@ bool HttpRequest::UserVerify(const string &name, const string &pwd, bool isLogin
     char order[256] = { 0 };
     MYSQL_FIELD *fields = nullptr;
     MYSQL_RES *res = nullptr;
-    
+
+    // 转义用户输入,防止 SQL 注入。最坏情况每个字符转义成 2 字节,入口已限长 <127,256 缓冲区不会溢出
+    char nameEsc[256] = { 0 };
+    char pwdEsc[256] = { 0 };
+    mysql_real_escape_string(sql, nameEsc, name.c_str(), name.size());
+    mysql_real_escape_string(sql, pwdEsc, pwd.c_str(), pwd.size());
+
     if(!isLogin) { flag = true; }
-    snprintf(order, 256, "SELECT username, password FROM user WHERE username='%s' LIMIT 1", name.c_str());
+    snprintf(order, 256, "SELECT username, password FROM user WHERE username='%s' LIMIT 1", nameEsc);
     LOG_DEBUG("%s", order);
 
     if(mysql_query(sql, order)) { 
@@ -219,13 +225,12 @@ bool HttpRequest::UserVerify(const string &name, const string &pwd, bool isLogin
     if(!isLogin && flag == true) {
         LOG_DEBUG("regirster!");
         bzero(order, 256);
-        snprintf(order, 256,"INSERT INTO user(username, password) VALUES('%s','%s')", name.c_str(), pwd.c_str());
+        snprintf(order, 256,"INSERT INTO user(username, password) VALUES('%s','%s')", nameEsc, pwdEsc);
         LOG_DEBUG( "%s", order);
-        if(mysql_query(sql, order)) { 
+        if(mysql_query(sql, order)) {
             LOG_DEBUG( "Insert error!");
-            flag = false; 
+            flag = false;
         }
-        flag = true;
     }
     // 连接由 raii 的析构函数自动归还,这里不能再手动 FreeConn(否则双重归还)
     LOG_DEBUG( "UserVerify success!!");
