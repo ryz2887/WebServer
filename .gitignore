@@ -13,6 +13,10 @@
 # 临时目录
 test_log_tmp/
 
+# 本地故障注入探针(有作用的验证工具,但含 VM 专属路径,不入库):
+# 压 fs.epoll.max_user_watches 触发 epoll_ctl(ADD) 的 ENOSPC,验证 AddClient_ 的 AddFd 失败分支
+test/probe_addfd_fail.sh
+
 # 编辑器
 .vscode/
 .idea/
