@@ -4,8 +4,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
-#include <regex>
-#include <errno.h>     
+#include <algorithm>
+#include <errno.h>
 #include <mysql/mysql.h> 
 
 #include "../buffer/buffer.h"

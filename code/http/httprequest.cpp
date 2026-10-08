@@ -72,28 +72,36 @@ void HttpRequest::ParsePath_() {
 }
 
 bool HttpRequest::ParseRequestLine_(const string& line) {
-    regex patten("^([^ ]*) ([^ ]*) HTTP/([^ ]*)$");
-    smatch subMatch;
-    if(regex_match(line, subMatch, patten)) {   
-        method_ = subMatch[1];
-        path_ = subMatch[2];
-        version_ = subMatch[3];
-        state_ = HEADERS;
-        return true;
+    // METHOD SP PATH SP HTTP/VERSION
+    size_t sp1 = line.find(' ');
+    size_t sp2 = (sp1 == string::npos) ? string::npos : line.find(' ', sp1 + 1);
+    if(sp1 == string::npos || sp2 == string::npos || line.find(' ', sp2 + 1) != string::npos) {
+        LOG_ERROR("RequestLine Error");
+        return false;
     }
-    LOG_ERROR("RequestLine Error");
-    return false;
+    if(line.compare(sp2 + 1, 5, "HTTP/") != 0) {
+        LOG_ERROR("RequestLine Error");
+        return false;
+    }
+    method_  = line.substr(0, sp1);
+    path_    = line.substr(sp1 + 1, sp2 - sp1 - 1);
+    version_ = line.substr(sp2 + 6);
+    state_ = HEADERS;
+    return true;
 }
 
 void HttpRequest::ParseHeader_(const string& line) {
-    regex patten("^([^:]*): ?(.*)$");
-    smatch subMatch;
-    if(regex_match(line, subMatch, patten)) {
-        header_[subMatch[1]] = subMatch[2];
+    size_t colon = line.find(':');
+    if(colon == string::npos) {
+        state_ = BODY;              // 空行:头部结束
+        return;
     }
-    else {
-        state_ = BODY;
+    string key = line.substr(0, colon);
+    string value = line.substr(colon + 1);
+    if(!value.empty() && value[0] == ' ') {
+        value.erase(0, 1);
     }
+    header_[key] = value;
 }
 
 void HttpRequest::ParseBody_(const string& line) {
